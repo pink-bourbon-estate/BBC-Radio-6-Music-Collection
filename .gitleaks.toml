@@ -1,0 +1,29 @@
+# gitleaks configuration - run on every push by .github/workflows/ci.yml
+# before anything is built or released.
+title = "BBC Radio 6 Music Collection"
+
+[extend]
+# All built-in rules: API keys, tokens, passwords, private keys, cloud credentials...
+useDefault = true
+
+# Personal email addresses. Real addresses occasionally turn up inside BBC
+# tracklist text, so the program redacts them (see `scrub_emails` in src/util.rs).
+[[rules]]
+id = "personal-email-address"
+description = "Email address (personal data)"
+regex = '''(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b'''
+keywords = ["@"]
+
+[rules.allowlist]
+description = "Placeholder and bot addresses"
+regexTarget = "match"
+regexes = [
+  '''(?i)@(example\.(com|org|net)|users\.noreply\.github\.com|noreply\.github\.com)$''',
+]
+
+[allowlist]
+description = "Lockfile checksums are not secrets. data/ is millions of rows of public broadcast text, which would trip the generic-key rules; CI scans it separately for email addresses."
+paths = [
+  '''^Cargo\.lock$''',
+  '''^data/''',
+]
