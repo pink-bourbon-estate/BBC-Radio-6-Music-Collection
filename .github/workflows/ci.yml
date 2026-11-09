@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: "8.28.0"
+
+jobs:
+  # Runs first. If anything looks like a secret or a personal email address,
+  # the build never starts and nothing is released.
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (checksum verified)
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "${base}/${tarball}" -o "${tarball}"
+          curl -sSfL "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o checksums.txt
+          grep " ${tarball}\$" checksums.txt | sha256sum -c -
+          tar -xzf "${tarball}" gitleaks
+
+      - name: Scan code, config and history
+        run: ./gitleaks detect --source . --config .gitleaks.toml --redact --verbose
+
+      - name: Scan the data files for email addresses
+        run: |
+          python3 - <<'PY'
+          import glob, gzip, re, sys
+          pat = re.compile(rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+          bad = 0
+          for path in sorted(glob.glob("data/**/*", recursive=True)):
+              if path.endswith(".csv"):
+                  opener = open
+              elif path.endswith(".csv.gz"):
+                  opener = gzip.open
+              else:
+                  continue
+              with opener(path, "rb") as f:
+                  for n, line in enumerate(f, 1):
+                      if pat.search(line):
+                          bad += 1
+                          print(f"{path}:{n}: contains an email address")
+          sys.exit(1 if bad else 0)
+          PY
+
+  build:
+    needs: secrets-scan
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Rebuild the song database from the committed plays and compare
+        shell: bash
+        run: |
+          out="${RUNNER_TEMP}/rebuilt"
+          ./target/release/bbc6 derive --data data --out "$out"
+          for f in tracks_unique tracks_by_programme artists_unique; do
+            cmp "data/$f.csv" "$out/$f.csv"
+          done

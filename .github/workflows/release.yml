@@ -1,0 +1,61 @@
+name: Release
+
+# Publish by pushing a tag, e.g.:  git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: ci
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x64, ext: .exe }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, name: linux-x64, ext: "" }
+          - { os: macos-latest, target: aarch64-apple-darwin, name: macos-arm64, ext: "" }
+          - { os: macos-latest, target: x86_64-apple-darwin, name: macos-x64, ext: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          pkg="bbc6-${{ github.ref_name }}-${{ matrix.name }}"
+          mkdir "$pkg"
+          cp "target/${{ matrix.target }}/release/bbc6${{ matrix.ext }}" README.md LICENSE "$pkg/"
+          if [ "${{ matrix.ext }}" = ".exe" ]; then 7z a "$pkg.zip" "$pkg" >/dev/null; else tar -czf "$pkg.tar.gz" "$pkg"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            bbc6-*.zip
+            bbc6-*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA-256 checksums
+        working-directory: dist
+        run: sha256sum bbc6-* > SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
