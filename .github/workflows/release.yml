@@ -1,19 +1,47 @@
 name: Release
 
-# Publish by pushing a tag, e.g.:  git tag v0.1.0 && git push origin v0.1.0
+# A release is published automatically when the version in Cargo.toml changes on
+# main (or when you run this workflow by hand). The tag is v<version>. If that
+# release already exists nothing happens.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - .github/workflows/release.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      exists: ${{ steps.v.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
   ci:
+    needs: version
+    if: needs.version.outputs.exists == 'false'
     uses: ./.github/workflows/ci.yml
 
   build:
-    needs: ci
+    needs: [version, ci]
     strategy:
       matrix:
         include:
@@ -31,7 +59,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          pkg="bbc6-${{ github.ref_name }}-${{ matrix.name }}"
+          pkg="bbc6-${{ needs.version.outputs.tag }}-${{ matrix.name }}"
           mkdir "$pkg"
           cp "target/${{ matrix.target }}/release/bbc6${{ matrix.ext }}" README.md LICENSE "$pkg/"
           if [ "${{ matrix.ext }}" = ".exe" ]; then 7z a "$pkg.zip" "$pkg" >/dev/null; else tar -czf "$pkg.tar.gz" "$pkg"; fi
@@ -43,7 +71,7 @@ jobs:
             bbc6-*.tar.gz
 
   publish:
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -58,4 +86,9 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
+        run: |
+          gh release create "${{ needs.version.outputs.tag }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ needs.version.outputs.tag }}" \
+            --notes "bbc6 ${{ needs.version.outputs.tag }}. Check your download against SHA256SUMS."
