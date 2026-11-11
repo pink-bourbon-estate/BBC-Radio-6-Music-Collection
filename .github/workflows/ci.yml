@@ -67,6 +67,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
       - name: Unit tests
         run: cargo test --locked
+      - name: Website script parses
+        if: runner.os == 'Linux'
+        run: node --check site/assets/app.js
       - name: Build
         run: cargo build --release --locked
       - name: Rebuild the song database from the committed plays and compare

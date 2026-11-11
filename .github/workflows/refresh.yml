@@ -1,0 +1,134 @@
+name: Daily refresh
+
+# Every day: check the BBC feeds, add any new episodes, publish the new plays, refresh the
+# downloadable CSVs and rebuild the website.
+#
+# New plays go to small files in data/plays/new/ (a few tens of KB a day). The big snapshot CSVs
+# in data/ are NOT rewritten daily, so the repository does not balloon; the up-to-date CSVs are
+# published as assets of the `data-latest` release instead.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # Be a good guest: stop if the BBC's robots.txt does not allow the two kinds of page we read.
+      - name: Check the BBC's robots.txt allows this
+        run: |
+          python3 - <<'PY'
+          import sys, urllib.request, urllib.robotparser
+          UA = "bbc6-radio6-collection"
+          req = urllib.request.Request("https://www.bbc.co.uk/robots.txt", headers={"User-Agent": UA + "/1 (+https://github.com/pink-bourbon-estate/bbc-radio-6-music-collection)"})
+          text = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+          rp = urllib.robotparser.RobotFileParser()
+          rp.parse(text.splitlines())
+          urls = ["https://www.bbc.co.uk/schedules/p00fzl65/2026/01/01", "https://www.bbc.co.uk/programmes/m0030z9j/segments.json"]
+          bad = [u for u in urls if not rp.can_fetch(UA, u)]
+          print("allowed" if not bad else "DISALLOWED: %s" % bad)
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Check the BBC feeds still look the way the program expects
+        run: ./target/release/bbc6 probe
+
+      - name: Find where the data ends
+        id: last
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import csv, datetime
+          last = max(r[0] for r in csv.reader(open("data/episodes.csv", encoding="utf-8")) if r and r[0][:2] == "20")
+          d = datetime.date.fromisoformat(last) - datetime.timedelta(days=3)  # re-check the last few days for late tracklists
+          print("start=" + d.isoformat())
+          print("last=" + last)
+          PY
+
+      - name: Fetch new episodes and tracklists
+        run: ./target/release/bbc6 scrape --data data --start "${{ steps.last.outputs.start }}" --retry-empty --workers 2 --gap 0.5
+
+      # scrape writes plain plays_YYYY.csv files (git ignores those). Compress them into data/plays/new/.
+      - name: Keep the new plays
+        run: |
+          mkdir -p data/plays/new
+          stamp=$(date -u +%Y-%m-%d)
+          for f in data/plays/plays_*.csv; do
+            [ -e "$f" ] || continue
+            year=$(basename "$f" .csv | sed 's/plays_//')
+            gzip -9 -c "$f" > "data/plays/new/plays_${year}_${stamp}.csv.gz"
+            rm "$f"
+          done
+          ls -la data/plays/new | tail -5
+
+      - name: Make sure no email address slipped in
+        run: |
+          python3 - <<'PY'
+          import glob, gzip, re, sys
+          pat = re.compile(rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+          bad = 0
+          for p in glob.glob("data/plays/new/*.csv.gz"):
+              for n, line in enumerate(gzip.open(p, "rb"), 1):
+                  if pat.search(line):
+                      bad += 1
+                      print(p, n, "contains an email address")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Commit the new plays
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/plays/new data/episodes.csv
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing new today."
+          else
+            git commit -m "Daily refresh: plays up to $(date -u +%Y-%m-%d)"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebuild the CSVs with the new plays and publish them as the data-latest release
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out="$RUNNER_TEMP/csv"
+          ./target/release/bbc6 derive --data data --include-new --out "$out"
+          cp data/episodes.csv data/artists_enriched.csv "$out/"
+          gzip -9 -f "$out"/*.csv
+          gh release view data-latest >/dev/null 2>&1 || gh release create data-latest \
+            --title "Latest data (rebuilt daily)" --latest=false \
+            --notes "The CSV files rebuilt every day with the newest plays included, gzipped. Same columns as data/ in the repository: see docs/DATA.md."
+          gh release upload data-latest "$out"/*.csv.gz --clobber
+
+  # Publish the website with the new plays. (A push made with the built-in token does not
+  # start other workflows by itself, so this calls the website workflow directly.)
+  website:
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

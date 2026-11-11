@@ -67,6 +67,10 @@ non-commercially, and share derivatives under the same licence. Treat those colu
 `Date, Time, Show, Episode, EpisodePID, Tracks`. It doubles as the scraper's ledger: an episode listed here is
 never fetched again (use `scrape --retry-empty` to re-check ones with 0 tracks).
 
+## `plays/new/`
+
+Small gzipped top-up files written by the daily refresh (`plays_<year>_<date>.csv.gz`, same columns as above). The snapshot CSVs in `data/` are built from `plays/plays_YYYY.csv.gz` only. The `data-latest` release has the same CSV files rebuilt including these top-ups.
+
 ## Not committed
 
 `data/_cache/` and `data/_mbcache/` (raw responses), `data/playlists/` (regenerate with `bbc6 playlists`),

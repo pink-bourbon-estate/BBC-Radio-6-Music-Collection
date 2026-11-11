@@ -22,6 +22,7 @@ const BOOL_FLAGS: &[&str] = &[
     "report",
     "refresh",
     "retry-empty",
+    "include-new",
     "help",
 ];
 

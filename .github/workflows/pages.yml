@@ -1,0 +1,63 @@
+name: Website
+
+# Builds the website's data files from the plays and publishes the site to GitHub Pages.
+# Runs when the site or its builder changes, when the daily refresh adds new plays, and by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "src/site.rs"
+      - "src/derive.rs"
+      - ".github/workflows/pages.yml"
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer one waits rather than cancelling a running one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Check the site script parses
+        run: node --check site/assets/app.js
+
+      - name: Build the data files
+        run: |
+          cargo build --release --locked
+          ./target/release/bbc6 site --data data --out site/data
+
+      - name: Make sure no email address slipped into the site data
+        run: |
+          python3 - <<'PY'
+          import glob, re, sys
+          pat = re.compile(rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+          bad = [p for p in glob.glob("site/**/*.json", recursive=True) if pat.search(open(p, "rb").read())]
+          print("files with an email address:", bad)
+          sys.exit(1 if bad else 0)
+          PY
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
