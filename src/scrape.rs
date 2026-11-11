@@ -19,7 +19,13 @@ use std::time::{Duration, Instant};
 
 pub const BBC: &str = "https://www.bbc.co.uk";
 pub const DEFAULT_SERVICE: &str = "p00fzl65"; // BBC Radio 6 Music
-const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+/// Say who is asking. The program names itself and links to its code, so the BBC can see
+/// what is making the requests and get in touch (it does not pretend to be a web browser).
+const UA: &str = concat!(
+    "bbc6-radio6-collection/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/pink-bourbon-estate/bbc-radio-6-music-collection)"
+);
 
 pub const PLAYS_HEADER: [&str; 14] = [
     "Date",

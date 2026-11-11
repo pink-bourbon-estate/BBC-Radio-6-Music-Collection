@@ -23,13 +23,23 @@ struct Artist {
 }
 
 /// Every plays file under the data folder, oldest first.
-fn plays_files(data: &Path) -> Vec<PathBuf> {
+///
+/// With `include_new`, the small daily top-up files in `data/plays/new/` are read too.
+/// The daily refresh writes there, so the committed snapshot in `data/*.csv` (which CI
+/// rebuilds and compares on every push) stays exactly in step with `data/plays/`.
+pub fn plays_files(data: &Path, include_new: bool) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(data.join("plays")) {
-        v.extend(rd.flatten().map(|e| e.path()).filter(|p| {
-            let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            n.starts_with("plays_") && (n.ends_with(".csv") || n.ends_with(".csv.gz"))
-        }));
+    let mut dirs = vec![data.join("plays")];
+    if include_new {
+        dirs.push(data.join("plays").join("new"));
+    }
+    for dir in dirs {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            v.extend(rd.flatten().map(|e| e.path()).filter(|p| {
+                let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                n.starts_with("plays_") && (n.ends_with(".csv") || n.ends_with(".csv.gz"))
+            }));
+        }
     }
     let single = data.join("plays_raw.csv");
     if single.exists() {
@@ -44,7 +54,7 @@ pub fn run(args: &Args) -> Res<()> {
     let out = PathBuf::from(args.str_or("out", &data.to_string_lossy()));
     let files = match args.get("plays") {
         Some(p) => vec![PathBuf::from(p)],
-        None => plays_files(&data),
+        None => plays_files(&data, args.flag("include-new")),
     };
     if files.is_empty() {
         return Err(format!("no plays files found in {}/plays - run `bbc6 scrape` first, or point --data at the folder", data.display()));

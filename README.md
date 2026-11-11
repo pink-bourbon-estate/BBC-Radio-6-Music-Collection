@@ -12,6 +12,25 @@ All of the information comes from BBC pages that are public on bbc.co.uk. Only f
 metadata is collected: no audio, no artwork. It was built for 6 Music; other BBC radio stations use the
 same pages and should work via `--service`, but that is untested.
 
+## The website
+
+The same data as a browsable, updated-daily website (GitHub Pages): a dashboard of what was played
+today, this week, this month and this year, a page for every show with every song it has played, an
+artists A-Z with MusicBrainz IDs, a page per year, most-played and least-played charts, and a **CSV / TXT
+download button on every table and chart**. The layout is a quiet, typographic one inspired by
+archive sites such as Divisare. It sets no cookies, loads nothing from other sites and has no tracking.
+
+- The site is plain HTML, CSS and JavaScript in [`site/`](site). No framework, no build step.
+- Its data files are built from the plays by `bbc6 site` (see `src/site.rs`) and are not committed.
+- **Daily refresh:** [`refresh.yml`](.github/workflows/refresh.yml) checks the BBC's robots.txt and feeds, scrapes
+  the newest episodes, saves the new plays as small files in `data/plays/new/`, republishes the full CSVs as
+  the `data-latest` release and redeploys the site. [`pages.yml`](.github/workflows/pages.yml) deploys it.
+- To try it locally: `cargo run --release -- site` then serve the `site/` folder
+  (for example `python3 -m http.server -d site`).
+- The "About" page on the site explains how the data is collected and kept up to date.
+
+To turn it on once: repository **Settings, Pages, Build and deployment, Source: GitHub Actions**.
+
 ## The data
 
 It is already in the [`data/`](data) folder: no scraping needed to use it.
@@ -70,9 +89,12 @@ bbc6 playlists
 - `scrape` skips every episode already listed in `data/episodes.csv`, and caches every response in
   `data/_cache/`, so stopping and restarting costs nothing. A day of 6 Music is about a dozen requests
   (roughly 3 seconds); the whole 19-year history from scratch is about 80,000 requests and takes several hours.
-- The scraper is deliberately gentle: at most about 4 requests a second across all workers.
+- The scraper is deliberately gentle: at most about 4 requests a second across all workers (the daily job uses
+  fewer), and it identifies itself in the User-Agent with the project name and a link to this repository.
 - New plays go to plain `data/plays/plays_YYYY.csv` files, which git ignores so nothing is published by accident.
-  To publish an update on purpose, gzip the file(s), `git add -f` them together with the regenerated CSVs, and commit.
+  To publish an update on purpose, gzip the file(s) into `data/plays/new/` and commit them (the daily refresh does
+  exactly this). `bbc6 derive --include-new` and `bbc6 site` read that folder too; plain `derive` does not, so the
+  committed snapshot CSVs always match `data/plays/`, and CI checks that.
 - `enrich` needs `--contact` (an email address or URL). MusicBrainz asks for one in the User-Agent so they can
   get in touch if a program misbehaves; it is sent nowhere else. Artists already enriched are skipped.
 

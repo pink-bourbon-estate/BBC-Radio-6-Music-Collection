@@ -2,6 +2,7 @@ mod derive;
 mod enrich;
 mod playlists;
 mod scrape;
+mod site;
 mod util;
 
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ COMMANDS
   derive      Build tracks_unique / tracks_by_programme / artists_unique from the plays
   enrich      Add genre/country/era to artists from MusicBrainz (slow, resumable)
   playlists   Write per-show and per-genre playlist files   [all|genre|programme]
+  site        Build the website's data files (JSON) from the plays and artist data
   find        Search the song database:  bbc6 find roxy music
 
 COMMON OPTIONS
@@ -29,6 +31,8 @@ scrape:    --start YYYY-MM-DD (2007-01-01)  --end YYYY-MM-DD (yesterday)
            --retry-empty   re-check episodes that previously had no tracks
 probe:     --date YYYY-MM-DD (2016-03-17)
 enrich:    --contact EMAIL_OR_URL (required)  --min-plays N  --limit N  --refresh
+derive:    --include-new   also read the daily top-ups in data/plays/new/
+site:      --out DIR (site/data)
 playlists: --min-plays N  --format csv|txt  --minimal  --report  --out DIR
 find:      --limit N (25)
 ";
@@ -89,6 +93,7 @@ fn main() {
             "derive" => derive::run(&args),
             "enrich" => enrich::run(&args),
             "playlists" => playlists::run(&args),
+            "site" => site::run(&args),
             "find" => find(&args),
             other => Err(format!("unknown command '{other}' (try `bbc6 --help`)")),
         }
