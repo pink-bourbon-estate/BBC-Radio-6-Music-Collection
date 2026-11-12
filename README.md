@@ -20,13 +20,21 @@ artists A-Z with MusicBrainz IDs, a page per year, most-played and least-played 
 download button on every table and chart**. The layout is a quiet, typographic one inspired by
 archive sites such as Divisare. It sets no cookies, loads nothing from other sites and has no tracking.
 
-- The site is plain HTML, CSS and JavaScript in [`site/`](site). No framework, no build step.
-- Its data files are built from the plays by `bbc6 site` (see `src/site.rs`) and are not committed.
+- The site is plain HTML, CSS and JavaScript in [`site/`](site). No framework, no build step for the script.
+- `bbc6 site` builds the data files **and a real HTML page for every show, year, chart and the 5,000 most
+  played artists** (with titles, descriptions, canonical links, Open Graph tags, schema.org data, `sitemap.xml`,
+  `robots.txt` and a `404.html` that opens any other artist). Search engines read those pages; the script
+  then makes them interactive. Nothing is committed: it is all built on deploy (`src/site.rs`, `src/pages.rs`).
+- **Listening:** tracks have plain search links (YouTube, Spotify, SoundCloud, Bandcamp), episodes link to
+  their BBC programme page, and shows/episodes have a playlist CSV for Tune My Music or Soundiiz. Nothing is
+  embedded and nobody is asked to sign in, so the no-tracking promise holds.
+- **Search Console:** submit `sitemap.xml` there. To verify ownership with a meta tag, set the repository
+  variable `GOOGLE_SITE_VERIFICATION` (or `BING_SITE_VERIFICATION`) to the tag's content value.
 - **Daily refresh:** [`refresh.yml`](.github/workflows/refresh.yml) checks the BBC's robots.txt and feeds, scrapes
   the newest episodes, saves the new plays as small files in `data/plays/new/`, republishes the full CSVs as
   the `data-latest` release and redeploys the site. [`pages.yml`](.github/workflows/pages.yml) deploys it.
-- To try it locally: `cargo run --release -- site` then serve the `site/` folder
-  (for example `python3 -m http.server -d site`).
+- To try it locally: `cargo run --release -- site` (writes to `public/`) then
+  `python3 -m http.server -d public`.
 - The "About" page on the site explains how the data is collected and kept up to date.
 
 To turn it on once: repository **Settings, Pages, Build and deployment, Source: GitHub Actions**.

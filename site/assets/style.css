@@ -126,3 +126,10 @@ details ol { font-size: 14px; margin: 8px 0 8px 1.4em; padding: 0; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 @media print { .top nav, .find, .tools button, .foot { display: none; } }
+
+/* listen links and playlist tools */
+.listen { white-space: nowrap; }
+.lk { font-size: .72rem; letter-spacing: .04em; color: var(--mute); border: 1px solid var(--line); padding: 0 .3em; margin-right: .1em; text-decoration: none; }
+.lk:hover, .lk:focus-visible { color: var(--ink); border-color: var(--ink); }
+.playlist { font-size: .85rem; color: var(--mute); }
+.playlist button { margin-right: .25em; }
