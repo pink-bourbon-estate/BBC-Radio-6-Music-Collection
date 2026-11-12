@@ -1,5 +1,6 @@
 mod derive;
 mod enrich;
+mod pages;
 mod playlists;
 mod scrape;
 mod site;
@@ -19,7 +20,7 @@ COMMANDS
   derive      Build tracks_unique / tracks_by_programme / artists_unique from the plays
   enrich      Add genre/country/era to artists from MusicBrainz (slow, resumable)
   playlists   Write per-show and per-genre playlist files   [all|genre|programme]
-  site        Build the website's data files (JSON) from the plays and artist data
+  site        Build the website (data files and pre-built pages) from the plays and artist data
   find        Search the song database:  bbc6 find roxy music
 
 COMMON OPTIONS
@@ -32,7 +33,7 @@ scrape:    --start YYYY-MM-DD (2007-01-01)  --end YYYY-MM-DD (yesterday)
 probe:     --date YYYY-MM-DD (2016-03-17)
 enrich:    --contact EMAIL_OR_URL (required)  --min-plays N  --limit N  --refresh
 derive:    --include-new   also read the daily top-ups in data/plays/new/
-site:      --out DIR (site/data)
+site:      --src DIR (site) --out DIR (public) --origin URL --base /path/
 playlists: --min-plays N  --format csv|txt  --minimal  --report  --out DIR
 find:      --limit N (25)
 ";

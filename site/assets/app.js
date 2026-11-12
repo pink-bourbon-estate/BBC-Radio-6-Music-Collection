@@ -3,8 +3,12 @@
 
    How it works, in short:
    - The data are JSON files in ./data, built by `bbc6 site` (see src/site.rs).
-   - The address bar's #hash chooses the page ("#/shows", "#/artist/b/<id>"). route() reads it,
-     fetches the JSON it needs, and draws the page into <main>.
+   - The address bar's path chooses the page ("/shows/", "/artist/b/<id>/"). Most pages also exist
+     as plain pre-built HTML (see src/pages.rs) so search engines can read them; this script then
+     replaces that with the interactive version. Pages without a pre-built copy come through
+     404.html and are drawn from the data here.
+   - Links are written in the code as "#/shows" and turned into real paths by h().
+   - route() reads the path, fetches the JSON it needs, and draws the page into <main>.
    - dataTable() and barChart() are the two reusable pieces. Both can download what they show.
 */
 (() => {
@@ -12,7 +16,10 @@
 
   const REPO = 'https://github.com/pink-bourbon-estate/bbc-radio-6-music-collection';
   const main = document.getElementById('main');
-  document.getElementById('repo').href = REPO;
+  /* the folder the site lives in, e.g. "/" or "/BBC-Radio-6-Music-Collection/" */
+  const BASE = new URL(document.currentScript.src).pathname.replace(/assets\/app\.js$/, '');
+  /** "#/show/x" -> "/<base>/show/x/" */
+  const toPath = (v) => { const r = v.slice(2); return BASE + (r && !r.endsWith('/') ? r + '/' : r); };
 
   /* ------------------------------------------------------------ helpers */
 
@@ -23,7 +30,7 @@
       if (v === false || v == null) continue;
       if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
       else if (k === 'class') el.className = v;
-      else el.setAttribute(k, v === true ? '' : v);
+      else el.setAttribute(k, k === 'href' && typeof v === 'string' && v.startsWith('#/') ? toPath(v) : v === true ? '' : v);
     }
     for (const kid of kids.flat()) {
       if (kid == null || kid === false) continue;
@@ -36,7 +43,7 @@
   /** Fetch a JSON file from ./data once, then remember it. */
   function getJSON(path) {
     if (!cache.has(path)) {
-      const p = fetch('data/' + path).then((r) => {
+      const p = fetch(BASE + 'data/' + path).then((r) => {
         if (!r.ok) throw new Error(path + ' (' + r.status + ')');
         return r.json();
       });
@@ -53,6 +60,22 @@
   const artistHref = (letter, id) => '#/artist/' + letter + '/' + encodeURIComponent(id);
   const artistLink = (name, letter, id) => (id ? h('a', { href: artistHref(letter, id) }, name) : name);
   const mbLink = (mbid) => h('a', { href: 'https://musicbrainz.org/artist/' + mbid, rel: 'noopener', 'aria-label': 'View on MusicBrainz' }, 'MB');
+  /** Plain search links for a track. They are ordinary links: nothing from those sites is loaded. */
+  const listenLinks = (artist, title) => {
+    const q = encodeURIComponent((artist + ' ' + title).trim());
+    const lk = (name, short, url) => h('a', { class: 'lk', href: url, rel: 'noopener noreferrer nofollow', title: 'Search ' + name, 'aria-label': 'Search ' + name + ' for ' + artist + ' - ' + title }, short);
+    return h('span', { class: 'listen' }, lk('YouTube', 'YT', 'https://www.youtube.com/results?search_query=' + q), ' ', lk('Spotify', 'SP', 'https://open.spotify.com/search/' + q),
+      ' ', lk('SoundCloud', 'SC', 'https://soundcloud.com/search?q=' + q), ' ', lk('Bandcamp', 'BC', 'https://bandcamp.com/search?q=' + q));
+  };
+  const bbcEpisode = (pid) => (pid ? h('a', { href: 'https://www.bbc.co.uk/programmes/' + encodeURIComponent(pid), rel: 'noopener' }, 'This episode on the BBC') : null);
+  /** A playlist download (artist, title) plus links to the transfer services that can import it. */
+  function playlistTools(name, pairs) {
+    const get = () => ({ head: ['Artist', 'Title'], rows: pairs });
+    return h('p', { class: 'playlist' },
+      h('button', { type: 'button', onclick: () => saveFile(name + '-playlist.csv', toCSV(get().head, get().rows), 'text/csv'), 'aria-label': 'Download this tracklist as a playlist CSV' }, 'Playlist CSV'),
+      ' then import it at ', h('a', { href: 'https://www.tunemymusic.com/', rel: 'noopener noreferrer' }, 'Tune My Music'), ' or ', h('a', { href: 'https://soundiiz.com/', rel: 'noopener noreferrer' }, 'Soundiiz'),
+      ' to make a playlist in the service you use.');
+  }
   const strip = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
   /** Save text as a file in the visitor's browser. */
@@ -120,14 +143,15 @@
       count.textContent = fmt(view.length) + (view.length === 1 ? ' row' : ' rows') + (view.length !== rows.length ? ' (of ' + fmt(rows.length) + ')' : '');
       const head = h('tr', {}, rank ? h('th', { scope: 'col', class: 'n' }, '#') : null,
         cols.map((c, i) => h('th', { scope: 'col', class: c.num ? 'n' : '', 'aria-sort': sortIdx === i ? (dir === 'asc' ? 'ascending' : 'descending') : false },
-          h('button', { type: 'button', onclick: () => { dir = sortIdx === i ? (dir === 'asc' ? 'desc' : 'asc') : (c.num ? 'desc' : 'asc'); sortIdx = i; limit = pageSize; draw(); } }, c.label))));
+          c.nodl ? c.label : h('button', { type: 'button', onclick: () => { dir = sortIdx === i ? (dir === 'asc' ? 'desc' : 'asc') : (c.num ? 'desc' : 'asc'); sortIdx = i; limit = pageSize; draw(); } }, c.label))));
       const body = view.slice(0, limit).map((r, n) => h('tr', {}, rank ? h('td', { class: 'n rank' }, n + 1) : null,
         cols.map((c) => h('td', { class: c.num ? 'n' : '' }, c.cell ? c.cell(r) : c.num && typeof c.value(r) === 'number' ? fmt(c.value(r)) : c.value(r)))));
       tbl.replaceChildren(...[caption ? h('caption', {}, caption) : null, h('thead', {}, head), h('tbody', {}, body)].filter(Boolean));
       more.replaceChildren(view.length > limit ? h('button', { type: 'button', onclick: () => { limit += 500; draw(); } }, 'Show more (' + fmt(Math.min(500, view.length - limit)) + ')') : null);
     }
     search.addEventListener('input', () => { q = search.value; limit = pageSize; draw(); });
-    const dl = downloadButtons(filename, () => ({ head: cols.map((c) => c.label), rows: view.map((r) => cols.map((c) => c.value(r))) }));
+    const dcols = cols.filter((c) => !c.nodl);
+    const dl = downloadButtons(filename, () => ({ head: dcols.map((c) => c.label), rows: view.map((r) => dcols.map((c) => c.value(r))) }));
     draw();
     wrap.append(h('div', { class: 'tools' }, search, count, dl), h('div', { class: 'tablewrap' }, tbl), more);
     return wrap;
@@ -138,6 +162,7 @@
     { label: 'Artist', value: (r) => r[0], cell: (r) => artistLink(r[0], r[4], r[3]) },
     { label: 'Track', value: (r) => r[1] },
     { label: 'Plays', value: (r) => r[2], num: true },
+    { label: 'Listen', value: () => '', cell: (r) => listenLinks(r[0], r[1]), nodl: true },
   ];
   const artistRowCols = [
     { label: 'Artist', value: (r) => r[0], cell: (r) => artistLink(r[0], r[2], r[1]) },
@@ -260,13 +285,17 @@
         section('Artists', dataTable({ cols: artistRowCols, rows: w.artists, filename: 'most-played-artists-' + which, sortCol: 1 }))));
   }
 
+  /** An episode's tracklist, each track with its listen links. Tracks are [artist, title, artist id, letter]. */
+  const epTracks = (e) => h('ol', {}, e.tracks.map((t) => h('li', {}, artistLink(t[0], t[3], t[2]), ' - ', t[1], ' ', listenLinks(t[0], t[1]))));
+
   async function latest() {
     const days = await getJSON('latest.json');
     setPage('Latest', h('h1', {}, 'Played in the last 7 days'), h('p', { class: 'lede' }, 'Every episode with a tracklist, newest first. Open an episode to see what was played.'),
       days.map((d) => section(fmtDate(d.date), d.episodes.length ? d.episodes.map((e) => h('details', {},
         h('summary', {}, e.time + '  ', h('b', {}, e.show), '  ', h('span', { class: 'meta' }, e.title + ' · ' + e.tracks.length + ' tracks')),
-        h('ol', {}, e.tracks.map((t) => h('li', {}, artistLink(t[0], t[3], t[2]), ' - ', t[1]))),
-        h('p', {}, h('a', { href: '#/show/' + e.slug }, 'All songs played on ' + e.show)))) : h('p', { class: 'meta' }, 'No tracklists found for this day.'))));
+        epTracks(e),
+        h('p', {}, h('a', { href: '#/show/' + e.slug }, 'All songs played on ' + e.show), e.pid ? ' · ' : null, bbcEpisode(e.pid)),
+        playlistTools(e.slug + '-' + e.date, e.tracks.map((t) => [t[0], t[1]])))) : h('p', { class: 'meta' }, 'No tracklists found for this day.'))));
   }
 
   async function shows() {
@@ -284,9 +313,9 @@
     setPage(s.name, h('p', { class: 'tag' }, h('a', { href: '#/shows' }, 'Shows')), h('h1', {}, s.name),
       h('p', { class: 'lede' }, fmt(s.plays) + ' plays · ' + fmt(s.episodes) + ' episodes with tracklists · ' + fmtDate(s.first) + ' to ' + fmtDate(s.last)),
       section('Most played artists', dataTable({ cols: artistRowCols, rows: s.top_artists, filename: slug + '-top-artists', sortCol: 1, rank: true })),
-      section('Every song played on this show', dataTable({ cols: trackCols(), rows: s.tracks, filename: slug + '-all-songs', sortCol: 2 })),
+      section('Every song played on this show', playlistTools(slug, s.tracks.map((r) => [r[0], r[1]])), dataTable({ cols: trackCols(), rows: s.tracks, filename: slug + '-all-songs', sortCol: 2 })),
       section('Latest episodes', s.recent.map((e) => h('details', {}, h('summary', {}, fmtDate(e.date) + ' ' + e.time + '  ', h('span', { class: 'meta' }, e.title + ' · ' + e.tracks.length + ' tracks')),
-        h('ol', {}, e.tracks.map((t) => h('li', {}, artistLink(t[0], t[3], t[2]), ' - ', t[1])))))));
+        epTracks(e), h('p', {}, bbcEpisode(e.pid)), playlistTools(slug + '-' + e.date, e.tracks.map((t) => [t[0], t[1]]))))));
   }
 
   const LETTERS = '0abcdefghijklmnopqrstuvwxyz'.split('');
@@ -331,8 +360,10 @@
         a.country ? [h('dt', {}, 'Country'), h('dd', {}, a.country)] : null,
         a.begin ? [h('dt', {}, 'Began'), h('dd', {}, a.begin)] : null,
         genres.length ? [h('dt', {}, 'Genres (MusicBrainz tags)'), h('dd', {}, genres.join(', '))] : null),
+      h('p', {}, a.mbid ? [h('a', { href: 'https://musicbrainz.org/artist/' + a.mbid, rel: 'noopener' }, 'Official website and profiles on MusicBrainz'), ' · '] : null,
+        h('a', { href: 'https://en.wikipedia.org/w/index.php?search=' + encodeURIComponent(a.name + ' musician'), rel: 'noopener noreferrer nofollow' }, 'Wikipedia search'), '  ', listenLinks(a.name, '')),
       genres.length ? null : h('p', { class: 'note' }, 'MusicBrainz has no genre for this artist yet. If you know them, adding one there will improve every site that uses it.'),
-      section('Most played tracks', dataTable({ cols: [{ label: 'Track', value: (r) => r[0] }, { label: 'Plays', value: (r) => r[1], num: true }], rows: a.top, filename: 'artist-' + id.slice(0, 40), sortCol: 1 })));
+      section('Most played tracks', dataTable({ cols: [{ label: 'Track', value: (r) => r[0] }, { label: 'Plays', value: (r) => r[1], num: true }, { label: 'Listen', value: () => '', cell: (r) => listenLinks(a.name, r[0]), nodl: true }], rows: a.top, filename: 'artist-' + id.slice(0, 40), sortCol: 1 })));
   }
 
   async function years(y) {
@@ -391,54 +422,21 @@
       section('Licence and credit', h('p', { class: 'prose' }, 'Tracklist facts originate with the BBC. Artist IDs, countries and dates are MusicBrainz core data (CC0). MusicBrainz genre and tag data is CC BY-NC-SA 3.0: please credit MusicBrainz, use it non-commercially and share alike. The code is MIT licensed.')));
   }
 
-  function about() {
-    setPage('About', h('h1', {}, 'About this site'),
-      h('div', { class: 'prose' },
-        h('p', { class: 'lede' }, 'An unofficial, non-commercial archive of what BBC Radio 6 Music has played, built for curiosity and personal research.'),
-        h('h3', {}, 'What this is, and is not'),
-        h('p', {}, 'It lists facts that the BBC publishes for every programme: the show, the date and time, and the tracks played with artist, title, album and label. There is no audio, no artwork and no programme descriptions. It is not made, endorsed or checked by the BBC, and it is not a place to listen: the BBC Sounds site and app are for that. Everything here points back to the facts, not away from them.'),
-        h('h3', {}, 'How the data was collected'),
-        h('ol', {},
-          h('li', {}, 'For each day, the program reads the BBC\'s public schedule page for 6 Music to learn which episodes aired.'),
-          h('li', {}, 'For each episode it reads the public tracklist (the "segments" feed that the BBC\'s own programme pages use).'),
-          h('li', {}, 'Each artist\'s MusicBrainz ID comes from the BBC\'s own data. Genre, country and start year come from MusicBrainz, matched by that ID.'),
-          h('li', {}, 'Everything is stored as plain CSV and rebuilt from the play-by-play files, so any number on the site can be checked.')),
-        h('h3', {}, 'Collecting it politely'),
-        h('ul', {},
-          h('li', {}, 'Slow: a few requests per second at most while catching up, and a daily update needs only a few dozen requests.'),
-          h('li', {}, 'Nothing is fetched twice: finished episodes are recorded and skipped, and every response is cached.'),
-          h('li', {}, 'The daily update checks the BBC\'s robots.txt first and stops if the pages it needs are not allowed.'),
-          h('li', {}, 'The program identifies itself with the name of this project and a link to its code, so the BBC can see who is asking and get in touch.'),
-          h('li', {}, 'Only factual metadata is kept. No accounts, no logins, no personal data of listeners.'),
-          h('li', {}, 'If the BBC, an artist or a rights holder asks for something to be changed or removed, it will be, promptly. The place to ask is an issue on the source code page.')),
-        h('h3', {}, 'Privacy'),
-        h('p', {}, 'This website sets no cookies, runs no analytics, shows no adverts and loads nothing from other sites (no web fonts, no libraries). Searches and filters happen in your browser. Real email addresses occasionally appear inside BBC tracklist text, and are replaced with "[email removed]" before anything is published.'),
-        h('h3', {}, 'How it is made and kept up to date'),
-        h('p', {}, 'A small program written in Rust, called bbc6, does the collecting, the maths and the building of this site\'s data files. The site itself is plain HTML, CSS and JavaScript, with no framework and no build step. A scheduled GitHub Actions job runs every day: it checks the BBC feeds, adds the new episodes, rebuilds the data and publishes the site. Every change is scanned for secrets and personal email addresses before it is accepted, and the song database is rebuilt from the raw plays and compared with the published copy to catch mistakes.'),
-        h('p', {}, 'Everything, including the code and the daily history of changes, is in the ', h('a', { href: REPO, rel: 'noopener' }, 'source repository'), ' and can be reused under the MIT licence.'),
-        h('h3', {}, 'Limits you should know about'),
-        h('ul', {},
-          h('li', {}, 'Tracklists only exist from mid-2008, are patchy until 2010, and are never perfect: if the presenter does not log a track, it is not here.'),
-          h('li', {}, 'The BBC logs theme tunes and jingles as tracks, so some of the most-played entries are not records.'),
-          h('li', {}, '"Today", "this week" and so on end on the last day in the data. The data is updated once a day, so they lag the radio by about a day.'),
-          h('li', {}, 'Tracks are matched by artist and title ignoring case and spacing, so the same song under two spellings is counted twice.'),
-          h('li', {}, 'Genre is the weakest part. It comes from MusicBrainz user tags, and many artists have none. That is why every artist is shown with its MusicBrainz ID: you can check it, correct it, or improve it at the source.'),
-          h('li', {}, 'Shows are grouped by the name in the BBC schedule. When a show is renamed or has guest presenters, its history can be split across names.')),
-        h('h3', {}, 'Credits'),
-        h('p', {}, 'Broadcast information: BBC. Artist identifiers and tags: ', h('a', { href: 'https://musicbrainz.org', rel: 'noopener' }, 'MusicBrainz'), ' and its contributors. The layout is inspired by the quiet, typographic archive style of architecture sites such as Divisare.')));
-  }
-
   function notFound() {
     setPage('Not found', h('h1', {}, 'Not found'), h('p', { class: 'lede' }, 'That page does not exist.'), h('p', {}, h('a', { href: '#/' }, 'Back to the start')));
   }
 
   /* ------------------------------------------------------------ router */
 
+  let firstDone = false;
   async function route() {
-    const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
+    const rel = location.pathname.startsWith(BASE) ? location.pathname.slice(BASE.length) : '';
+    const parts = rel.split('/').filter(Boolean).map(decodeURIComponent);
     const [page, a, b] = parts;
+    if (main.hasAttribute('data-keep') && !firstDone) { firstDone = true; return; }
+    firstDone = true;
     document.querySelectorAll('.top nav a').forEach((l) => {
-      const on = l.getAttribute('href') === '#/' + (page === 'show' ? 'shows' : page === 'artist' ? 'artists' : page === 'year' ? 'years' : page);
+      const on = l.getAttribute('href') === BASE + (page === 'show' ? 'shows' : page === 'artist' ? 'artists' : page === 'year' ? 'years' : page) + '/';
       on ? l.setAttribute('aria-current', 'page') : l.removeAttribute('aria-current');
     });
     main.replaceChildren(h('p', { class: 'loading' }, 'Loading'));
@@ -455,7 +453,7 @@
         case 'year': await years(a); break;
         case 'search': await search(a || ''); break;
         case 'downloads': await downloads(); break;
-        case 'about': about(); break;
+        case 'about': location.replace(BASE + 'about/'); return;
         default: notFound();
       }
     } catch (e) {
@@ -467,8 +465,24 @@
   document.getElementById('find').addEventListener('submit', (e) => {
     e.preventDefault();
     const v = document.getElementById('q').value.trim();
-    if (v) location.hash = '#/search/' + encodeURIComponent(v);
+    if (v) go(BASE + 'search/' + encodeURIComponent(v) + '/');
   });
-  window.addEventListener('hashchange', route);
+  /** Open a page of this site without reloading. */
+  function go(path) {
+    history.pushState(null, '', path);
+    main.removeAttribute('data-keep');
+    route();
+  }
+  /* Links inside the site open without a reload; the About page is plain HTML, so it loads normally. */
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target || a.hasAttribute('download')) return;
+    const u = new URL(a.href, location.href);
+    if (u.origin !== location.origin || !u.pathname.startsWith(BASE) || u.hash || u.pathname === BASE + 'about/') return;
+    e.preventDefault();
+    go(u.pathname + u.search);
+  });
+  document.querySelector('.skip').addEventListener('click', (e) => { e.preventDefault(); main.focus(); });
+  window.addEventListener('popstate', route);
   route();
 })();

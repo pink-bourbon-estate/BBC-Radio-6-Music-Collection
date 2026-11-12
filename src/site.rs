@@ -4,29 +4,33 @@
 //! browser, so this command pre-computes small JSON files from the plays and the artist data:
 //!
 //! ```text
-//! site/data/meta.json          when the data ends, totals
-//! site/data/summary.json       plays per year / weekday / hour, top shows, genres, countries
-//! site/data/windows.json       most played today, this week, this month, this year
-//! site/data/latest.json        every episode of the last 7 days with its tracklist
-//! site/data/years.json         the top tracks and artists of every year
-//! site/data/tracks_top.json    the most-played tracks of all time
-//! site/data/tracks_rare.json   one-off plays, newest first
-//! site/data/artists_top.json   the most-played artists of all time
-//! site/data/shows.json         every show
-//! site/data/shows/<slug>.json  one show: all its tracks, top artists, latest episodes
-//! site/data/artists/<a-z>.json every artist starting with that letter, with MusicBrainz info
+//! <out>/data/meta.json          when the data ends, totals
+//! <out>/data/summary.json       plays per year / weekday / hour, top shows, genres, countries
+//! <out>/data/windows.json       most played today, this week, this month, this year
+//! <out>/data/latest.json        every episode of the last 7 days with its tracklist
+//! <out>/data/years.json         the top tracks and artists of every year
+//! <out>/data/tracks_top.json    the most-played tracks of all time
+//! <out>/data/tracks_rare.json   one-off plays, newest first
+//! <out>/data/artists_top.json   the most-played artists of all time
+//! <out>/data/shows.json         every show
+//! <out>/data/shows/<slug>.json  one show: all its tracks, top artists, latest episodes
+//! <out>/data/artists/<a-z>.json every artist starting with that letter, with MusicBrainz info
 //! ```
 //!
 //! "Today" and "this week" mean the days up to the **last day in the data**, not the clock on
 //! your computer, because the data only ever ends on the last day that was scraped.
 
 use crate::derive::plays_files;
+use crate::pages::{esc, listen_links, Emitter};
 use crate::playlists::classify;
 use crate::util::*;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const ARTIST_PAGES: usize = 5000;
+const REPO: &str = "https://github.com/pink-bourbon-estate/bbc-radio-6-music-collection";
 
 /// One play, stored compactly (everything is an index into a table).
 struct Row {
@@ -67,6 +71,7 @@ struct Episode {
     time: String,
     show: u32,
     title: String,
+    pid: String,
     /// (artist name, title, artist index) in broadcast order
     tracks: Vec<(String, String, u32)>,
 }
@@ -129,6 +134,19 @@ fn write_json(path: &Path, v: &Value) -> Res<()> {
     serde_json::to_writer(std::io::BufWriter::new(f), v).map_err(err("json"))
 }
 
+/// 1234567 -> "1,234,567"
+fn thou(n: u64) -> String {
+    let s = n.to_string();
+    let mut o = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            o.push(',');
+        }
+        o.push(c);
+    }
+    o
+}
+
 fn iso(day: i64) -> String {
     Day(day).iso()
 }
@@ -171,7 +189,11 @@ fn load_mb(data: &Path) -> HashMap<String, Mb> {
 
 pub fn run(args: &Args) -> Res<()> {
     let data = PathBuf::from(args.str_or("data", "data"));
-    let out = PathBuf::from(args.str_or("out", "site/data"));
+    let src = PathBuf::from(args.str_or("src", "site"));
+    let root = PathBuf::from(args.str_or("out", "public"));
+    let out = root.join("data");
+    let origin = args.str_or("origin", "https://example.github.io");
+    let base = args.str_or("base", "/");
     let files = plays_files(&data, true);
     if files.is_empty() {
         return Err(format!("no plays files in {}/plays", data.display()));
@@ -219,6 +241,7 @@ pub fn run(args: &Args) -> Res<()> {
                     time: c.get(&rec, "Time").to_string(),
                     show: si,
                     title: scrub_emails(c.get(&rec, "Episode")).into_owned(),
+                    pid: pid.to_string(),
                     tracks: Vec::new(),
                 });
                 hours.push(c.get(&rec, "Time").get(..2).and_then(|h| h.parse().ok()).unwrap_or(0));
@@ -281,12 +304,16 @@ pub fn run(args: &Args) -> Res<()> {
     }
     let mut used = HashSet::new();
     for a in artists.iter_mut() {
-        let base = if a.mbid.is_empty() { format!("n-{}", slug(&a.name)) } else { a.mbid.clone() };
-        a.id = unique(base, &mut used);
+        a.id = unique(slug(&a.name), &mut used);
         a.letter = letter_of(&a.name);
     }
     let mb = load_mb(&data);
     let mb_of = |a: &Artist| mb.get(&a.mbid).cloned().unwrap_or_default();
+    let mut aorder: Vec<u32> = (0..artists.len() as u32).collect();
+    aorder.sort_by(|&a, &b| artists[b as usize].plays.cmp(&artists[a as usize].plays).then(a.cmp(&b)));
+    // the artists that get their own pre-built page (the app opens every other artist too)
+    let page_ids: HashSet<String> = aorder.iter().take(ARTIST_PAGES).map(|&a| artists[a as usize].id.clone()).collect();
+    let mut em = Emitter::new(&src, &root, &origin, &base, &iso(latest))?;
 
     // a track row for tables: [artist, title, plays, artist id, artist letter]
     let trow = |ti: u32, plays: u32| -> Value {
@@ -360,7 +387,8 @@ pub fn run(args: &Args) -> Res<()> {
             }),
         );
     }
-    write_json(&out.join("windows.json"), &Value::Object(windows))?;
+    let windows = Value::Object(windows);
+    write_json(&out.join("windows.json"), &windows)?;
 
     // --------------------------------------------------------- years.json
     let mut year_list = Vec::new();
@@ -409,8 +437,6 @@ pub fn run(args: &Args) -> Res<()> {
         .collect();
     write_json(&out.join("tracks_rare.json"), &json!({ "total": once_total, "rows": rare }))?;
 
-    let mut aorder: Vec<u32> = (0..artists.len() as u32).collect();
-    aorder.sort_by(|&a, &b| artists[b as usize].plays.cmp(&artists[a as usize].plays).then(a.cmp(&b)));
     let atop: Vec<Value> = aorder
         .iter()
         .take(1000)
@@ -457,7 +483,7 @@ pub fn run(args: &Args) -> Res<()> {
     let ep_json = |e: u32| -> Value {
         let ep = &episodes[e as usize];
         json!({
-            "date": ep.date, "time": ep.time, "title": ep.title,
+            "date": ep.date, "time": ep.time, "title": ep.title, "pid": ep.pid,
             "tracks": ep.tracks.iter().map(|(a, t, ai)| {
                 if *ai == u32::MAX { json!([a, t, "", ""]) } else { json!([a, t, artists[*ai as usize].id, artists[*ai as usize].letter]) }
             }).collect::<Vec<_>>(),
@@ -478,6 +504,25 @@ pub fn run(args: &Args) -> Res<()> {
         all.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let mut recent: Vec<u32> = recent_by_show[s].iter().cloned().collect();
         recent.reverse();
+        {
+            let sh = &shows[s];
+            let tr: Vec<Value> = all.iter().take(100).map(|&(t, c)| trow(t, c)).collect();
+            let ar: Vec<Value> = top_artists.iter().map(|&(a, c)| arow(a, c)).collect();
+            let names: Vec<String> = ar.iter().take(3).filter_map(|r| r[0].as_str().map(String::from)).collect();
+            let mut body = format!(
+                "<p class=\"tag\"><a href=\"{}\">Shows</a></p><h1>{}</h1><p class=\"lede\">{} plays across {} episodes with tracklists, from {} to {}.</p>",
+                em.u("shows/"), esc(&sh.name), thou(s_plays[s]), thou(s_eps[s].len() as u64), iso(s_first[s]), iso(s_last[s])
+            );
+            body.push_str(&format!("<h2>Most played artists</h2>{}<h2>Most played songs</h2>{}", em.artist_table(&ar, &page_ids, 20), em.track_table(&tr, &page_ids, 100)));
+            body.push_str("<h2>Latest episodes</h2>");
+            for &e in &recent {
+                let ev = ep_json(e);
+                body.push_str(&em.episode(&ev, &format!("{} {} - {}", ev["date"].as_str().unwrap_or(""), ev["time"].as_str().unwrap_or(""), ev["title"].as_str().unwrap_or("")), &page_ids));
+            }
+            let desc = format!("Every song played on {} on BBC Radio 6 Music: {} plays. Most played artists include {}.", sh.name, thou(s_plays[s]), names.join(", "));
+            let ld = json!({"@context": "https://schema.org", "@type": "RadioSeries", "name": sh.name, "url": format!("{}{}", origin.trim_end_matches('/'), em.u(&format!("show/{}/", sh.slug))), "description": desc, "inLanguage": "en-GB"});
+            em.page(&format!("show/{}/", sh.slug), &sh.name, &desc, &body, Some(ld), false)?;
+        }
         write_json(
             &out.join("shows").join(format!("{}.json", shows[s].slug)),
             &json!({
@@ -551,6 +596,44 @@ pub fn run(args: &Args) -> Res<()> {
                 })
             })
             .collect();
+        for &a in list.iter() {
+            let ar = &artists[a as usize];
+            if !page_ids.contains(&ar.id) {
+                continue;
+            }
+            let m = mb_of(ar);
+            let mut ts = by_artist[a as usize].clone();
+            ts.sort_by(|&x, &y| tracks[y as usize].plays.cmp(&tracks[x as usize].plays).then(x.cmp(&y)));
+            let tops: Vec<(&str, u32)> = ts.iter().take(15).map(|&t| (tracks[t as usize].title.as_str(), tracks[t as usize].plays)).collect();
+            let mut facts = format!("<dt>Plays</dt><dd>{} plays of {} different tracks</dd><dt>First / last played</dt><dd>{} / {}</dd>", thou(ar.plays as u64), thou(ar.tracks as u64), iso(ar.first), iso(ar.last));
+            if ar.mbid.is_empty() {
+                facts.push_str("<dt>MusicBrainz ID</dt><dd>Not supplied by the BBC for this artist</dd>");
+            } else {
+                facts.push_str(&format!("<dt>MusicBrainz ID</dt><dd><code>{0}</code> <a href=\"https://musicbrainz.org/artist/{0}\" rel=\"noopener\">View on MusicBrainz</a></dd>", esc(&ar.mbid)));
+            }
+            for (k, v) in [("Type", &m.kind), ("Country", &m.country), ("Began", &m.begin), ("Genres (MusicBrainz tags)", &m.genres)] {
+                if !v.is_empty() {
+                    facts.push_str(&format!("<dt>{k}</dt><dd>{}</dd>", esc(&v.replace(';', ", "))));
+                }
+            }
+            let mut body = format!(
+                "<p class=\"tag\"><a href=\"{}\">Artists</a> / <a href=\"{}\">{}</a></p><h1>{}</h1><dl class=\"facts\">{}</dl>",
+                em.u("artists/"), em.u(&format!("artists/{letter}/")), esc(&letter.to_uppercase()), esc(&ar.name), facts
+            );
+            body.push_str("<h2>Most played tracks</h2><div class=\"tablewrap\"><table><thead><tr><th>Track</th><th class=\"n\">Plays</th><th>Listen</th></tr></thead><tbody>");
+            for (title, plays) in &tops {
+                body.push_str(&format!("<tr><td>{}</td><td class=\"n\">{}</td><td class=\"listen\">{}</td></tr>", esc(title), plays, listen_links(&ar.name, title)));
+            }
+            body.push_str("</tbody></table></div><p class=\"note\">YT, SP, SC and BC open a search for the track on YouTube, Spotify, SoundCloud and Bandcamp. They are ordinary links: nothing from those sites is loaded here.</p>");
+            let top3: Vec<&str> = tops.iter().take(3).map(|t| t.0).collect();
+            let desc = format!("{} on BBC Radio 6 Music: {} plays of {} tracks between {} and {}. Most played: {}.", ar.name, thou(ar.plays as u64), thou(ar.tracks as u64), iso(ar.first), iso(ar.last), top3.join(", "));
+            let url = format!("{}{}", origin.trim_end_matches('/'), em.u(&format!("artist/{letter}/{}/", ar.id)));
+            let mut ld = json!({"@context": "https://schema.org", "@type": if m.kind == "Person" { "Person" } else { "MusicGroup" }, "name": ar.name, "url": url});
+            if !ar.mbid.is_empty() {
+                ld["sameAs"] = json!([format!("https://musicbrainz.org/artist/{}", ar.mbid)]);
+            }
+            em.page(&format!("artist/{letter}/{}/", ar.id), &ar.name, &desc, &body, Some(ld), false)?;
+        }
         write_json(&out.join("artists").join(format!("{letter}.json")), &json!(rows))?;
     }
 
@@ -587,6 +670,152 @@ pub fn run(args: &Args) -> Res<()> {
             "one_play_tracks": once_total,
         }),
     )?;
+    // ------------------------------------------------------------ static pages
+    let o = origin.trim_end_matches('/').to_string();
+    let home_url = format!("{}{}", o, em.u(""));
+    let names_of = |rows: &[Value], n: usize| -> String {
+        rows.iter().take(n).map(|r| format!("{} - {}", r[0].as_str().unwrap_or(""), r[1].as_str().unwrap_or(""))).collect::<Vec<_>>().join("; ")
+    };
+    let arr = |v: &Value| v.as_array().cloned().unwrap_or_default();
+
+    // home
+    {
+        let wk = arr(&windows["week"]["tracks"]);
+        let body = format!(
+            "<h1>Every track played on BBC Radio 6 Music.</h1><p class=\"lede\">An archive of {} plays across {} shows, from {} to {}. Updated every day.</p>\
+             <ul><li><a href=\"{}\">Most played: today, this week, this month, this year, all time</a></li><li><a href=\"{}\">Latest: every tracklist from the last 7 days</a></li>\
+             <li><a href=\"{}\">Shows: every song each show has played</a></li><li><a href=\"{}\">Artists A to Z, with MusicBrainz IDs</a></li><li><a href=\"{}\">Years</a></li><li><a href=\"{}\">Downloads (CSV)</a></li></ul>\
+             <h2>Most played this week</h2>{}",
+            thou(rows.len() as u64), thou(shows.len() as u64), iso(earliest), iso(latest),
+            em.u("most-played/"), em.u("latest/"), em.u("shows/"), em.u("artists/"), em.u("years/"), em.u("downloads/"),
+            em.track_table(&wk, &page_ids, 20)
+        );
+        let desc = "An unofficial, non-commercial archive of every track played on BBC Radio 6 Music: shows, artists, charts and downloads. Updated daily.";
+        let ld = json!({
+            "@context": "https://schema.org", "@type": "Dataset",
+            "name": "Every track played on BBC Radio 6 Music", "description": desc,
+            "url": home_url, "isAccessibleForFree": true, "inLanguage": "en-GB",
+            "temporalCoverage": format!("{}/{}", iso(earliest), iso(latest)),
+            "keywords": ["BBC Radio 6 Music", "playlist", "tracklist", "radio", "music"],
+            "distribution": [{"@type": "DataDownload", "encodingFormat": "text/csv", "contentUrl": format!("{REPO}/releases/tag/data-latest")}],
+            "sameAs": [REPO]
+        });
+        em.page("", "", desc, &body, Some(ld), false)?;
+    }
+
+    // most played
+    {
+        let mut hub = String::from("<h1>Most played on BBC Radio 6 Music</h1><p class=\"lede\">The most played tracks and artists for different periods.</p><ul>");
+        for (k, label) in [("today", "The last day in the data"), ("week", "The last 7 days"), ("month", "The last 30 days"), ("year", "This year so far"), ("all", "All time"), ("least", "Least played: tracks played only once")] {
+            hub.push_str(&format!("<li><a href=\"{}\">{}</a></li>", em.u(&format!("most-played/{k}/")), label));
+        }
+        hub.push_str("</ul>");
+        em.page("most-played/", "Most played", "The most played tracks and artists on BBC Radio 6 Music: last day, week, month, year, all time, and the least played.", &hub, None, false)?;
+        for (k, label) in [("today", "the last day in the data"), ("week", "the last 7 days"), ("month", "the last 30 days"), ("year", "this year so far")] {
+            let w = &windows[k];
+            let (tr, ar) = (arr(&w["tracks"]), arr(&w["artists"]));
+            let body = format!(
+                "<h1>Most played, {label}</h1><p class=\"lede\">{} to {} · {} plays · {} different tracks.</p><h2>Tracks</h2>{}<h2>Artists</h2>{}",
+                w["from"].as_str().unwrap_or(""), w["to"].as_str().unwrap_or(""), thou(w["plays"].as_u64().unwrap_or(0)), thou(w["distinct_tracks"].as_u64().unwrap_or(0)),
+                em.track_table(&tr, &page_ids, 100), em.artist_table(&ar, &page_ids, 100)
+            );
+            let desc = format!("The most played tracks and artists on BBC Radio 6 Music, {label}. Top tracks: {}.", names_of(&tr, 3));
+            em.page(&format!("most-played/{k}/"), &format!("Most played tracks and artists, {label}"), &desc, &body, None, false)?;
+        }
+        let (tt, aa) = (&top_tracks, &atop);
+        let body = format!(
+            "<h1>Most played, all time</h1><p class=\"lede\">Some entries are programme theme tunes and jingles, which the BBC logs as tracks.</p><h2>Tracks</h2>{}<h2>Artists</h2>{}",
+            em.track_table(tt, &page_ids, 200), em.artist_table(aa, &page_ids, 200)
+        );
+        let desc = format!("The most played tracks and artists on BBC Radio 6 Music of all time. Top tracks: {}.", names_of(tt, 3));
+        em.page("most-played/all/", "Most played tracks and artists of all time", &desc, &body, None, false)?;
+        let body = format!(
+            "<h1>Least played</h1><p class=\"lede\">{} tracks have been played exactly once. These are the most recent.</p>{}",
+            thou(once_total as u64), em.track_table(&rare, &page_ids, 200)
+        );
+        em.page("most-played/least/", "Least played tracks", "Tracks played only once on BBC Radio 6 Music, newest first.", &body, None, false)?;
+    }
+
+    // latest
+    {
+        let mut body = String::from("<h1>Played in the last 7 days</h1><p class=\"lede\">Every episode with a tracklist, newest first.</p>");
+        for d in &days {
+            body.push_str(&format!("<h2>{}</h2>", d["date"].as_str().unwrap_or("")));
+            for e in arr(&d["episodes"]) {
+                let head = format!("{} {} - {}", e["time"].as_str().unwrap_or(""), e["show"].as_str().unwrap_or(""), e["title"].as_str().unwrap_or(""));
+                body.push_str(&em.episode(&e, &head, &page_ids));
+            }
+        }
+        em.page("latest/", "Latest tracklists", "Every BBC Radio 6 Music episode with its tracklist from the last 7 days, updated daily.", &body, None, false)?;
+    }
+
+    // shows
+    {
+        let mut body = format!("<h1>Shows</h1><p class=\"lede\">{} shows. Open one to see every song it has played.</p><div class=\"tablewrap\"><table><thead><tr><th>Show</th><th class=\"n\">Plays</th><th class=\"n\">Episodes</th><th>First</th><th>Last</th></tr></thead><tbody>", thou(shows.len() as u64));
+        for r in &show_index {
+            body.push_str(&format!(
+                "<tr><td><a href=\"{}\">{}</a></td><td class=\"n\">{}</td><td class=\"n\">{}</td><td>{}</td><td>{}</td></tr>",
+                em.u(&format!("show/{}/", r[1].as_str().unwrap_or(""))), esc(r[0].as_str().unwrap_or("")), r[2], r[3], r[5].as_str().unwrap_or(""), r[6].as_str().unwrap_or("")
+            ));
+        }
+        body.push_str("</tbody></table></div>");
+        em.page("shows/", "Shows", "Every BBC Radio 6 Music show with every song it has played, from the archive of tracklists.", &body, None, false)?;
+    }
+
+    // artists: top, and each letter
+    {
+        let nav: String = std::iter::once(("".to_string(), "Top".to_string()))
+            .chain("0abcdefghijklmnopqrstuvwxyz".chars().chain(std::iter::once('~')).map(|c| match c {
+                '0' => ("0/".to_string(), "0-9".to_string()),
+                '~' => ("other/".to_string(), "other".to_string()),
+                c => (format!("{c}/"), c.to_string()),
+            }))
+            .map(|(p, l)| format!("<a href=\"{}\">{}</a>", em.u(&format!("artists/{p}")), l))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let body = format!("<h1>Artists</h1><p class=\"lede\">Each artist has a MusicBrainz ID where the BBC supplied one. Choose a letter to browse everyone.</p><nav class=\"az\" aria-label=\"Artists A to Z\">{nav}</nav><h2>Most played</h2>{}", em.artist_table(&atop, &page_ids, 1000));
+        em.page("artists/", "Artists", "BBC Radio 6 Music artists A to Z, with play counts and MusicBrainz IDs. The 1,000 most played are listed here.", &body, None, false)?;
+        for (letter, list) in &shards {
+            let rowsv: Vec<Value> = list.iter().take(300).map(|&a| arow(a, artists[a as usize].plays)).collect();
+            let label = match letter.as_str() { "0" => "0-9".to_string(), "other" => "other characters".to_string(), l => l.to_uppercase() };
+            let body = format!("<h1>Artists: {label}</h1><p class=\"lede\">{} artists. The 300 most played are listed here; the rest are searchable.</p><nav class=\"az\">{nav}</nav>{}", thou(list.len() as u64), em.artist_table(&rowsv, &page_ids, 300));
+            em.page(&format!("artists/{letter}/"), &format!("Artists {label}"), &format!("BBC Radio 6 Music artists starting with {label}: play counts and MusicBrainz IDs."), &body, None, false)?;
+        }
+    }
+
+    // years
+    {
+        let mut body = String::from("<h1>Years</h1><p class=\"lede\">Tracklists begin in mid-2008 and are complete from about 2010.</p><ul>");
+        for y in year_list.iter().rev() {
+            body.push_str(&format!("<li><a href=\"{}\">{}</a> · {} plays</li>", em.u(&format!("year/{}/", y["year"])), y["year"], thou(y["plays"].as_u64().unwrap_or(0))));
+        }
+        body.push_str("</ul>");
+        em.page("years/", "Years", "BBC Radio 6 Music plays per year, with a top 100 tracks and artists for every year since 2008.", &body, None, false)?;
+        for y in &year_list {
+            let (tr, ar) = (arr(&y["tracks"]), arr(&y["top_artists"]));
+            let body = format!(
+                "<p class=\"tag\"><a href=\"{}\">Years</a></p><h1>{}</h1><p class=\"lede\">{} plays · {} episodes · {} different artists.</p><h2>Most played tracks</h2>{}<h2>Most played artists</h2>{}",
+                em.u("years/"), y["year"], thou(y["plays"].as_u64().unwrap_or(0)), thou(y["episodes"].as_u64().unwrap_or(0)), thou(y["artists"].as_u64().unwrap_or(0)),
+                em.track_table(&tr, &page_ids, 100), em.artist_table(&ar, &page_ids, 100)
+            );
+            let desc = format!("The most played tracks and artists on BBC Radio 6 Music in {}. Top tracks: {}.", y["year"], names_of(&tr, 3));
+            em.page(&format!("year/{}/", y["year"]), &format!("Most played of {}", y["year"]), &desc, &body, None, false)?;
+        }
+    }
+
+    // downloads and about
+    em.page(
+        "downloads/", "Downloads",
+        "Download the BBC Radio 6 Music play-by-play dataset as CSV: tracks, artists, shows and episodes. Free for personal, non-commercial use.",
+        &format!("<h1>Downloads</h1><p class=\"lede\">The whole dataset is plain CSV. See the <a href=\"{REPO}/tree/main/data\">data folder</a> and the <a href=\"{REPO}/releases/tag/data-latest\">latest daily build</a>. Every table on this site also has CSV and TXT buttons.</p>"),
+        None, false,
+    )?;
+    let about = fs::read_to_string(src.join("about.html")).map_err(err("cannot read about.html"))?;
+    em.page("about/", "About", "How this unofficial BBC Radio 6 Music archive is made, kept up to date and collected politely, and what its data can and cannot tell you.", &about, None, true)?;
+
+    let pages_written = em.count() + 1;
+    em.finish()?;
+    println!("{pages_written} pages, sitemap.xml, robots.txt and 404.html written to {}", root.display());
     println!("Site data written to {}", out.display());
     Ok(())
 }
@@ -611,6 +840,13 @@ mod tests {
         assert_eq!(unique("a".into(), &mut used), "a");
         assert_eq!(unique("a".into(), &mut used), "a-2");
         assert_eq!(unique(String::new(), &mut used), "x");
+    }
+
+    #[test]
+    fn thousands_separators() {
+        assert_eq!(thou(0), "0");
+        assert_eq!(thou(999), "999");
+        assert_eq!(thou(1234567), "1,234,567");
     }
 
     #[test]
