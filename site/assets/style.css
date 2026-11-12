@@ -21,6 +21,10 @@
     --accent: #ff6b6b; --bar: #f1f1ee;
   }
 }
+:root[data-theme="dark"] {
+    --bg: #111111; --ink: #f1f1ee; --mute: #a3a3a0; --line: #2c2c2c; --soft: #1b1b1b;
+    --accent: #ff6b6b; --bar: #f1f1ee;
+}
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 var(--sans); }
@@ -133,3 +137,7 @@ details ol { font-size: 14px; margin: 8px 0 8px 1.4em; padding: 0; }
 .lk:hover, .lk:focus-visible { color: var(--ink); border-color: var(--ink); }
 .playlist { font-size: .85rem; color: var(--mute); }
 .playlist button { margin-right: .25em; }
+
+/* light / dark switch (see theme.js) */
+.themebtn { margin-left: auto; padding: 4px 10px; font-size: 11px; }
+@media print { .themebtn { display: none; } }
