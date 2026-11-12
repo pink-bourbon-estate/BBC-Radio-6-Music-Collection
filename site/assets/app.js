@@ -1,4 +1,4 @@
-/* Radio 6 Collection - the whole front end, in one plain file (no frameworks, no build step,
+/* BBC Radio 6 Music Collection - the whole front end, in one plain file (no frameworks, no build step,
    nothing loaded from other sites).
 
    How it works, in short:
@@ -222,7 +222,7 @@
   const trackItem = (r) => h('li', {}, artistLink(r[0], r[4], r[3]), ' - ', r[1], h('span', { class: 'meta' }, ' ×' + r[2]));
 
   function setPage(title, ...nodes) {
-    document.title = (title ? title + ' - ' : '') + 'Radio 6 Collection';
+    document.title = (title ? title + ' - ' : '') + 'BBC Radio 6 Music Collection';
     main.replaceChildren(...nodes.flat().filter((n) => n != null && n !== false));
     window.scrollTo(0, 0);
   }

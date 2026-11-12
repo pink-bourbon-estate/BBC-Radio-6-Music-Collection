@@ -37,8 +37,8 @@ a:hover { color: var(--accent); }
 
 /* ---------- header ---------- */
 .top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 32px; padding: 20px 24px 16px; border-bottom: 1px solid var(--line); }
-.mark { font-size: 30px; font-weight: 500; letter-spacing: -0.03em; text-decoration: none; line-height: 1; }
-.mark span { font-weight: 300; margin-left: 2px; }
+.mark { font-size: 17px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; text-decoration: none; line-height: 1.1; }
+.mark span { font-weight: 300; }
 .top nav { display: flex; flex-wrap: wrap; gap: 6px 22px; flex: 1; }
 .top nav a { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; text-decoration: none; padding: 4px 0; border-bottom: 1px solid transparent; }
 .top nav a:hover, .top nav a[aria-current="page"] { border-bottom-color: var(--ink); color: var(--ink); }

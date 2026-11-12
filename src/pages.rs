@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const SITE_NAME: &str = "Radio 6 Collection";
+pub const SITE_NAME: &str = "BBC Radio 6 Music Collection";
 
 /// HTML-escape text.
 pub fn esc(s: &str) -> String {
@@ -107,7 +107,7 @@ impl Emitter {
     }
 
     fn fill(&self, path: &str, title: &str, desc: &str, main_attr: &str, body: &str, ld: Option<&Value>, noindex: bool) -> String {
-        let full = if title.is_empty() { "Radio 6 Collection - every track played on BBC Radio 6 Music".to_string() } else { format!("{title} - {SITE_NAME}") };
+        let full = if title.is_empty() { "BBC Radio 6 Music Collection - every track played on BBC Radio 6 Music".to_string() } else { format!("{title} - {SITE_NAME}") };
         let canon = format!("{}{}{}", self.origin, self.base, path);
         let ld = ld
             .map(|v| format!("<script type=\"application/ld+json\">{}</script>\n", serde_json::to_string(v).unwrap_or_default().replace("</", "<\\/")))
