@@ -50,8 +50,8 @@ jobs:
           GOOGLE_SITE_VERIFICATION: ${{ vars.GOOGLE_SITE_VERIFICATION }}
           BING_SITE_VERIFICATION: ${{ vars.BING_SITE_VERIFICATION }}
 
-      - name: Copy search-engine verification files into the site
-        run: cp site/google*.html site/BingSiteAuth.xml public/ 2>/dev/null || true
+      - name: Copy search-engine verification files and the IndexNow key into the site
+        run: cp site/google*.html site/BingSiteAuth.xml site/*.txt public/ 2>/dev/null || true
 
       - name: Make sure no email address slipped into the site
         run: |
@@ -71,3 +71,12 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      # Tell Bing and other IndexNow search engines about the pages. When the site itself changed
+      # every page is sent; on the daily refresh only the pages that change every day.
+      - name: Tell IndexNow search engines
+        continue-on-error: true
+        run: |
+          sleep 60   # let the new key file reach the web first
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then mode=all; else mode=fresh; fi
+          python3 .github/scripts/indexnow.py public/sitemap.xml "$mode"
