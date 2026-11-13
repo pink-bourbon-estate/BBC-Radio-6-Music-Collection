@@ -77,6 +77,6 @@ jobs:
       - name: Tell IndexNow search engines
         continue-on-error: true
         run: |
-          sleep 60   # let the new key file reach the web first
+          sleep 90   # let the new key file reach the web first
           if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then mode=all; else mode=fresh; fi
           python3 .github/scripts/indexnow.py public/sitemap.xml "$mode"
