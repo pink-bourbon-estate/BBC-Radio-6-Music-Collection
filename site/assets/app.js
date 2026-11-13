@@ -258,23 +258,53 @@
     );
   }
 
-  async function mostPlayed(which = 'week') {
-    const items = [['#/most-played/today', 'Last day', 'today'], ['#/most-played/week', 'This week', 'week'], ['#/most-played/month', 'This month', 'month'], ['#/most-played/year', 'This year', 'year'], ['#/most-played/all', 'All time', 'all'], ['#/most-played/least', 'Least played', 'least']];
-    if (which === 'least') {
-      const r = await getJSON('tracks_rare.json');
-      return setPage('Least played', h('h1', {}, 'Least played'), tabs(items, which),
-        h('p', { class: 'lede' }, fmt(r.total) + ' tracks have been played exactly once. These are the ' + fmt(r.rows.length) + ' most recent.'),
-        dataTable({ cols: [...trackCols().slice(0, 2), { label: 'Played on', value: (x) => x[5] }], rows: r.rows, filename: 'played-once', rank: false, sortCol: 2, sortDir: 'desc' }));
+  const playedTabs = [['#/most-played/today', 'Last day', 'today'], ['#/most-played/week', 'This week', 'week'], ['#/most-played/month', 'This month', 'month'], ['#/most-played/year', 'This year', 'year'], ['#/most-played/all', 'All time', 'all'], ['#/crate-dive', 'Least played', 'least']];
+
+  /** Tracks and artists played exactly once, counted for every year. Also the "Least played" tab. */
+  async function crateDive(y) {
+    const list = await getJSON('crate.json');
+    if (y) {
+      const e = list.find((x) => String(x.year) === String(y));
+      if (!e) return notFound();
+      const d = await getJSON('crate/' + y + '.json');
+      const sample = (n, shown) => (shown < n ? ' (' + fmt(shown) + ' shown, spread evenly through the year)' : '');
+      return setPage('Crate dive ' + y, h('p', { class: 'tag' }, h('a', { href: '#/crate-dive' }, 'Crate dive')), h('h1', {}, String(y)),
+        h('p', { class: 'lede' }, fmt(e.once_tracks) + ' tracks and ' + fmt(e.once_artists) + ' artists played only once, ever · ' + fmt(e.tracks) + ' different tracks were played in ' + y),
+        h('div', { class: 'two' },
+          section('Tracks' + sample(e.once_tracks, d.track_rows.length), dataTable({
+            cols: [{ label: 'Artist', value: (r) => r[0], cell: (r) => artistLink(r[0], r[4], r[3]) }, { label: 'Track', value: (r) => r[1] }, { label: 'Played on', value: (r) => r[5] }, { label: 'Listen', value: () => '', cell: (r) => listenLinks(r[0], r[1]), nodl: true }],
+            rows: d.track_rows, filename: 'played-once-tracks-' + y, rank: false, sortCol: 2, sortDir: 'asc',
+          })),
+          section('Artists' + sample(e.once_artists, d.artist_rows.length), dataTable({
+            cols: [{ label: 'Artist', value: (r) => r[0], cell: (r) => artistLink(r[0], r[2], r[1]) }, { label: 'Track', value: (r) => r[3] }, { label: 'Played on', value: (r) => r[4] }],
+            rows: d.artist_rows, filename: 'played-once-artists-' + y, rank: false, sortCol: 2, sortDir: 'asc',
+          }))));
     }
+    const total = list.reduce((n, r) => n + r.once_tracks, 0);
+    const pct = (a, b) => (b ? Math.round((a * 100) / b) + '%' : '0%');
+    setPage('Crate dive: tracks and artists played only once', h('h1', {}, 'Crate dive'), tabs(playedTabs, 'least'),
+      h('p', { class: 'lede' }, fmt(total) + ' tracks in the archive have been played exactly once. Here they are, year by year: the deepest cuts to reach 6 Music.'),
+      h('p', { class: 'note' }, 'A one-off is a track, or an artist, with a single play in the whole archive. Recent years score higher because new tracks have had less time to be played again, and tracklists before about 2010 are incomplete.'),
+      barChart({ title: 'Tracks played only once, by year', filename: 'played-once-tracks-by-year', unit: 'tracks', data: list.map((r) => ({ label: String(r.year), value: r.once_tracks })), labelEvery: 1 }),
+      barChart({ title: 'Artists played only once, by year', filename: 'played-once-artists-by-year', unit: 'artists', data: list.map((r) => ({ label: String(r.year), value: r.once_artists })), labelEvery: 1 }),
+      section('Choose a year', h('div', { class: 'grid' }, [...list].reverse().map((r) => card({ tag: String(r.year), title: fmt(r.once_tracks) + ' one-off tracks', href: '#/crate-dive/' + r.year, lines: [fmt(r.once_artists) + ' one-off artists', pct(r.once_tracks, r.tracks) + ' of the tracks played that year'], more: ['#/crate-dive/' + r.year, 'Dive into ' + r.year] })))),
+      section('Table', dataTable({
+        cols: [{ label: 'Year', value: (r) => r.year, cell: (r) => h('a', { href: '#/crate-dive/' + r.year }, String(r.year)) }, { label: 'One-off tracks', value: (r) => r.once_tracks, num: true }, { label: 'Of all tracks', value: (r) => (r.tracks ? r.once_tracks / r.tracks : 0), cell: (r) => pct(r.once_tracks, r.tracks), num: true }, { label: 'One-off artists', value: (r) => r.once_artists, num: true }, { label: 'Of all artists', value: (r) => (r.artists ? r.once_artists / r.artists : 0), cell: (r) => pct(r.once_artists, r.artists), num: true }],
+        rows: list, filename: 'crate-dive-by-year', rank: false, sortCol: 0, sortDir: 'desc',
+      })));
+  }
+
+  async function mostPlayed(which = 'week') {
+    const items = playedTabs;
+    if (which === 'least') return crateDive();
     if (which === 'all') {
-      const [t, a] = await Promise.all([getJSON('tracks_top.json'), getJSON('artists_top.json')]);
+      const [t, a, meta] = await Promise.all([getJSON('tracks_top.json'), getJSON('artists_top.json'), getJSON('meta.json')]);
       return setPage('Most played of all time', h('h1', {}, 'Most played, all time'), tabs(items, which),
+        h('p', { class: 'lede' }, fmtDate(meta.first_day) + ' to ' + fmtDate(meta.as_of) + ' · ' + fmt(meta.plays) + ' plays · ' + fmt(meta.tracks) + ' different tracks · ' + fmt(meta.one_play_tracks) + ' of them played only once'),
         h('p', { class: 'note' }, 'Some of the most-played entries are programme theme tunes and jingles, which the BBC logs as tracks.'),
-        section('Tracks', dataTable({ cols: [...trackCols(), { label: 'First played', value: (r) => r[5] }, { label: 'Last played', value: (r) => r[6] }], rows: t, filename: 'most-played-tracks-all-time', sortCol: 2 })),
-        section('Artists', dataTable({
-          cols: [{ label: 'Artist', value: (r) => r[0], cell: (r) => artistLink(r[0], r[2], r[1]) }, { label: 'Plays', value: (r) => r[3], num: true }, { label: 'Tracks', value: (r) => r[4], num: true }, { label: 'Genre', value: (r) => r[5] }, { label: 'Country', value: (r) => r[6] }],
-          rows: a, filename: 'most-played-artists-all-time', sortCol: 1,
-        })));
+        h('div', { class: 'two' },
+          section('Tracks', dataTable({ cols: trackCols(), rows: t, filename: 'most-played-tracks-all-time', sortCol: 2 })),
+          section('Artists', dataTable({ cols: artistRowCols, rows: a, filename: 'most-played-artists-all-time', sortCol: 1 }))));
     }
     const w = (await getJSON('windows.json'))[which];
     const names = { today: 'the last day in the data', week: 'the last 7 days', month: 'the last 30 days', year: 'this year so far' };
@@ -444,6 +474,7 @@
       switch (page) {
         case '': case undefined: await home(); break;
         case 'most-played': await mostPlayed(a || 'week'); break;
+        case 'crate-dive': await crateDive(a); break;
         case 'latest': await latest(); break;
         case 'shows': await shows(); break;
         case 'show': await show(a); break;

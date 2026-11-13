@@ -11,6 +11,8 @@
 //! <out>/data/years.json         the top tracks and artists of every year
 //! <out>/data/tracks_top.json    the most-played tracks of all time
 //! <out>/data/tracks_rare.json   one-off plays, newest first
+//! <out>/data/crate.json         one-off tracks and artists counted for every year
+//! <out>/data/crate/<year>.json  that year's one-off tracks and artists
 //! <out>/data/artists_top.json   the most-played artists of all time
 //! <out>/data/shows.json         every show
 //! <out>/data/shows/<slug>.json  one show: all its tracks, top artists, latest episodes
@@ -30,6 +32,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const ARTIST_PAGES: usize = 5000;
+/// Rows kept for each year of the crate dive, spread evenly across that year.
+const CRATE_ROWS: usize = 1000;
 const REPO: &str = "https://github.com/pink-bourbon-estate/bbc-radio-6-music-collection";
 
 /// One play, stored compactly (everything is an index into a table).
@@ -437,6 +441,59 @@ pub fn run(args: &Args) -> Res<()> {
         .collect();
     write_json(&out.join("tracks_rare.json"), &json!({ "total": once_total, "rows": rare }))?;
 
+    // ------------------------------------------------------ crate dive: one-off plays by year
+    // A one-off track has exactly one play in the whole archive; a one-off artist has exactly one
+    // play in total, so their single track is the only thing they have ever had played.
+    let mut once_t: HashMap<i64, Vec<u32>> = HashMap::new();
+    let mut once_a: HashMap<i64, Vec<(u32, u32)>> = HashMap::new();
+    for (ti, t) in tracks.iter().enumerate() {
+        if t.plays != 1 {
+            continue;
+        }
+        let y = year_of(t.first);
+        once_t.entry(y).or_default().push(ti as u32);
+        if t.ai != u32::MAX && artists[t.ai as usize].plays == 1 {
+            once_a.entry(y).or_default().push((t.ai, ti as u32));
+        }
+    }
+    let mut crate_list = Vec::new();
+    for &y in &years {
+        let mut ts = once_t.remove(&y).unwrap_or_default();
+        ts.sort_by_key(|&t| (tracks[t as usize].first, t));
+        let mut asx = once_a.remove(&y).unwrap_or_default();
+        asx.sort_by_key(|&(_, t)| (tracks[t as usize].first, t));
+        let trows: Vec<Value> = spread(&ts, CRATE_ROWS)
+            .iter()
+            .map(|&t| {
+                let mut v = trow(t, 1);
+                if let Some(a) = v.as_array_mut() {
+                    a.push(json!(iso(tracks[t as usize].first)));
+                }
+                v
+            })
+            .collect();
+        let arows: Vec<Value> = spread(&asx, CRATE_ROWS)
+            .iter()
+            .map(|&(a, t)| {
+                let ar = &artists[a as usize];
+                json!([ar.name, ar.id, ar.letter, tracks[t as usize].title, iso(tracks[t as usize].first)])
+            })
+            .collect();
+        let summary = json!({
+            "year": y,
+            "tracks": yt[&y].len(),
+            "once_tracks": ts.len(),
+            "artists": y_artists.get(&y).map(|s| s.len()).unwrap_or(0),
+            "once_artists": asx.len(),
+        });
+        let mut detail = summary.clone();
+        detail["track_rows"] = json!(trows);
+        detail["artist_rows"] = json!(arows);
+        write_json(&out.join("crate").join(format!("{y}.json")), &detail)?;
+        crate_list.push(summary);
+    }
+    write_json(&out.join("crate.json"), &json!(crate_list))?;
+
     let atop: Vec<Value> = aorder
         .iter()
         .take(1000)
@@ -684,10 +741,10 @@ pub fn run(args: &Args) -> Res<()> {
         let body = format!(
             "<h1>Every track played on BBC Radio 6 Music.</h1><p class=\"lede\">An archive of {} plays across {} shows, from {} to {}. Updated every day.</p>\
              <ul><li><a href=\"{}\">Most played: today, this week, this month, this year, all time</a></li><li><a href=\"{}\">Latest: every tracklist from the last 7 days</a></li>\
-             <li><a href=\"{}\">Shows: every song each show has played</a></li><li><a href=\"{}\">Artists A to Z, with MusicBrainz IDs</a></li><li><a href=\"{}\">Years</a></li><li><a href=\"{}\">Downloads (CSV)</a></li></ul>\
+             <li><a href=\"{}\">Shows: every song each show has played</a></li><li><a href=\"{}\">Artists A to Z, with MusicBrainz IDs</a></li><li><a href=\"{}\">Years</a></li><li><a href=\"{}\">Crate dive: tracks and artists played only once</a></li><li><a href=\"{}\">Downloads (CSV)</a></li></ul>\
              <h2>Most played this week</h2>{}",
             thou(rows.len() as u64), thou(shows.len() as u64), iso(earliest), iso(latest),
-            em.u("most-played/"), em.u("latest/"), em.u("shows/"), em.u("artists/"), em.u("years/"), em.u("downloads/"),
+            em.u("most-played/"), em.u("latest/"), em.u("shows/"), em.u("artists/"), em.u("years/"), em.u("crate-dive/"), em.u("downloads/"),
             em.track_table(&wk, &page_ids, 20)
         );
         let desc = "An unofficial, non-commercial archive of every track played on BBC Radio 6 Music: shows, artists, charts and downloads. Updated daily.";
@@ -706,9 +763,10 @@ pub fn run(args: &Args) -> Res<()> {
     // most played
     {
         let mut hub = String::from("<h1>Most played on BBC Radio 6 Music</h1><p class=\"lede\">The most played tracks and artists for different periods.</p><ul>");
-        for (k, label) in [("today", "The last day in the data"), ("week", "The last 7 days"), ("month", "The last 30 days"), ("year", "This year so far"), ("all", "All time"), ("least", "Least played: tracks played only once")] {
+        for (k, label) in [("today", "The last day in the data"), ("week", "The last 7 days"), ("month", "The last 30 days"), ("year", "This year so far"), ("all", "All time")] {
             hub.push_str(&format!("<li><a href=\"{}\">{}</a></li>", em.u(&format!("most-played/{k}/")), label));
         }
+        hub.push_str(&format!("<li><a href=\"{}\">Least played: the crate dive, tracks and artists played only once, year by year</a></li>", em.u("crate-dive/")));
         hub.push_str("</ul>");
         em.page("most-played/", "Most played", "The most played tracks and artists on BBC Radio 6 Music: last day, week, month, year, all time, and the least played.", &hub, None, false)?;
         for (k, label) in [("today", "the last day in the data"), ("week", "the last 7 days"), ("month", "the last 30 days"), ("year", "this year so far")] {
@@ -724,16 +782,12 @@ pub fn run(args: &Args) -> Res<()> {
         }
         let (tt, aa) = (&top_tracks, &atop);
         let body = format!(
-            "<h1>Most played, all time</h1><p class=\"lede\">Some entries are programme theme tunes and jingles, which the BBC logs as tracks.</p><h2>Tracks</h2>{}<h2>Artists</h2>{}",
+            "<h1>Most played, all time</h1><p class=\"lede\">{} to {} · {} plays · {} different tracks · {} of them played only once</p><p class=\"note\">Some of the most-played entries are programme theme tunes and jingles, which the BBC logs as tracks.</p><h2>Tracks</h2>{}<h2>Artists</h2>{}",
+            iso(earliest), iso(latest), thou(rows.len() as u64), thou(tracks.len() as u64), thou(once_total as u64),
             em.track_table(tt, &page_ids, 200), em.artist_table(aa, &page_ids, 200)
         );
         let desc = format!("The most played tracks and artists on BBC Radio 6 Music of all time. Top tracks: {}.", names_of(tt, 3));
         em.page("most-played/all/", "Most played tracks and artists of all time", &desc, &body, None, false)?;
-        let body = format!(
-            "<h1>Least played</h1><p class=\"lede\">{} tracks have been played exactly once. These are the most recent.</p>{}",
-            thou(once_total as u64), em.track_table(&rare, &page_ids, 200)
-        );
-        em.page("most-played/least/", "Least played tracks", "Tracks played only once on BBC Radio 6 Music, newest first.", &body, None, false)?;
     }
 
     // latest
@@ -803,6 +857,43 @@ pub fn run(args: &Args) -> Res<()> {
         }
     }
 
+    // crate dive: tracks and artists played only once, year by year
+    {
+        let mut body = format!(
+            "<h1>Crate dive</h1><p class=\"lede\">{} tracks in the archive have been played exactly once. Here they are, year by year: the deepest cuts to reach 6 Music.</p>\
+             <p class=\"note\">A one-off is a track, or an artist, with a single play in the whole archive. Recent years score higher because new tracks have had less time to be played again, and tracklists before about 2010 are incomplete.</p>\
+             <div class=\"tablewrap\"><table><thead><tr><th>Year</th><th class=\"n\">One-off tracks</th><th class=\"n\">Of all tracks</th><th class=\"n\">One-off artists</th><th class=\"n\">Of all artists</th></tr></thead><tbody>",
+            thou(once_total as u64)
+        );
+        let pct = |a: u64, b: u64| if b == 0 { "0%".to_string() } else { format!("{:.0}%", a as f64 * 100.0 / b as f64) };
+        for y in crate_list.iter().rev() {
+            let (t, ot, a, oa) = (y["tracks"].as_u64().unwrap_or(0), y["once_tracks"].as_u64().unwrap_or(0), y["artists"].as_u64().unwrap_or(0), y["once_artists"].as_u64().unwrap_or(0));
+            body.push_str(&format!(
+                "<tr><td><a href=\"{}\">{}</a></td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td></tr>",
+                em.u(&format!("crate-dive/{}/", y["year"])), y["year"], thou(ot), pct(ot, t), thou(oa), pct(oa, a)
+            ));
+        }
+        body.push_str("</tbody></table></div>");
+        em.page("crate-dive/", "Crate dive: tracks and artists played only once", "Tracks and artists played only once on BBC Radio 6 Music, counted year by year since 2008: the deepest cuts the station has ever played.", &body, None, false)?;
+        for y in &crate_list {
+            let detail: Value = serde_json::from_reader(std::io::BufReader::new(fs::File::open(out.join("crate").join(format!("{}.json", y["year"]))).map_err(err("cannot read crate file"))?)).map_err(err("json"))?;
+            let mut body = format!(
+                "<p class=\"tag\"><a href=\"{}\">Crate dive</a></p><h1>{}</h1><p class=\"lede\">{} tracks and {} artists played only once, ever. {} different tracks were played in {}.</p><h2>Tracks</h2><div class=\"tablewrap\"><table><thead><tr><th>Artist</th><th>Track</th><th>Played on</th></tr></thead><tbody>",
+                em.u("crate-dive/"), y["year"], thou(y["once_tracks"].as_u64().unwrap_or(0)), thou(y["once_artists"].as_u64().unwrap_or(0)), thou(y["tracks"].as_u64().unwrap_or(0)), y["year"]
+            );
+            for r in arr(&detail["track_rows"]).iter().take(100) {
+                body.push_str(&format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", em.artist_link(r[0].as_str().unwrap_or(""), r[3].as_str().unwrap_or(""), r[4].as_str().unwrap_or(""), &page_ids), esc(r[1].as_str().unwrap_or("")), r[5].as_str().unwrap_or("")));
+            }
+            body.push_str("</tbody></table></div><h2>Artists</h2><div class=\"tablewrap\"><table><thead><tr><th>Artist</th><th>Track</th><th>Played on</th></tr></thead><tbody>");
+            for r in arr(&detail["artist_rows"]).iter().take(100) {
+                body.push_str(&format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", em.artist_link(r[0].as_str().unwrap_or(""), r[1].as_str().unwrap_or(""), r[2].as_str().unwrap_or(""), &page_ids), esc(r[3].as_str().unwrap_or("")), r[4].as_str().unwrap_or("")));
+            }
+            body.push_str("</tbody></table></div>");
+            let desc = format!("Tracks and artists played only once on BBC Radio 6 Music in {}: {} one-off tracks and {} one-off artists.", y["year"], y["once_tracks"], y["once_artists"]);
+            em.page(&format!("crate-dive/{}/", y["year"]), &format!("Crate dive {}: played only once", y["year"]), &desc, &body, None, false)?;
+        }
+    }
+
     // downloads and about
     em.page(
         "downloads/", "Downloads",
@@ -818,6 +909,14 @@ pub fn run(args: &Args) -> Res<()> {
     println!("{pages_written} pages, sitemap.xml, robots.txt and 404.html written to {}", root.display());
     println!("Site data written to {}", out.display());
     Ok(())
+}
+
+/// At most `cap` items spread evenly through `v`, so a long list is not just its first days.
+fn spread<T: Clone>(v: &[T], cap: usize) -> Vec<T> {
+    if v.len() <= cap {
+        return v.to_vec();
+    }
+    (0..cap).map(|i| v[i * v.len() / cap].clone()).collect()
 }
 
 #[cfg(test)]
@@ -840,6 +939,13 @@ mod tests {
         assert_eq!(unique("a".into(), &mut used), "a");
         assert_eq!(unique("a".into(), &mut used), "a-2");
         assert_eq!(unique(String::new(), &mut used), "x");
+    }
+
+    #[test]
+    fn spread_keeps_everything_when_short_and_samples_evenly_when_long() {
+        assert_eq!(spread(&[1, 2, 3], 5), vec![1, 2, 3]);
+        let v: Vec<u32> = (0..10).collect();
+        assert_eq!(spread(&v, 5), vec![0, 2, 4, 6, 8]);
     }
 
     #[test]
