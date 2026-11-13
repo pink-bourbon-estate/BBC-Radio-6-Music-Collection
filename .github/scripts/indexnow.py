@@ -38,6 +38,23 @@ print(f"IndexNow: {len(urls)} URLs ({mode}) for {host}{base}")
 if os.environ.get("INDEXNOW_DRY"):
     print(json.dumps(body), urls[:3], "...")
     sys.exit(0)
+# The search engine fetches the key file to check we own the site, so make sure it is really
+# being served (and is exactly the key) before asking. GitHub Pages can take a minute or two.
+import time
+served = False
+for attempt in range(8):
+    try:
+        with urllib.request.urlopen(body["keyLocation"], timeout=20) as r:
+            text = r.read().decode("utf-8", "replace").strip()
+            print(f"key file: HTTP {r.status}, {'matches' if text == key else 'DOES NOT MATCH the key'}")
+            served = text == key
+    except Exception as e:  # noqa: BLE001
+        print(f"key file not reachable yet ({e})")
+    if served:
+        break
+    time.sleep(30)
+if not served:
+    sys.exit("the key file is not being served, so IndexNow would refuse; not sending")
 for i in range(0, len(urls), 9000):  # the limit is 10,000 per request
     req = urllib.request.Request(
         "https://api.indexnow.org/IndexNow",
