@@ -51,7 +51,7 @@ jobs:
           BING_SITE_VERIFICATION: ${{ vars.BING_SITE_VERIFICATION }}
 
       - name: Copy search-engine verification files into the site
-        run: cp site/google*.html public/ 2>/dev/null || true
+        run: cp site/google*.html site/BingSiteAuth.xml public/ 2>/dev/null || true
 
       - name: Make sure no email address slipped into the site
         run: |
