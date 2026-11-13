@@ -50,6 +50,9 @@ jobs:
           GOOGLE_SITE_VERIFICATION: ${{ vars.GOOGLE_SITE_VERIFICATION }}
           BING_SITE_VERIFICATION: ${{ vars.BING_SITE_VERIFICATION }}
 
+      - name: Copy search-engine verification files into the site
+        run: cp site/google*.html public/ 2>/dev/null || true
+
       - name: Make sure no email address slipped into the site
         run: |
           python3 - <<'PY'
