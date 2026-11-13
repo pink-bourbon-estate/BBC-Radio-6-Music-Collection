@@ -18,7 +18,7 @@ same pages and should work via `--service`, but that is untested.
 
 The same data as a browsable, updated-daily website (GitHub Pages): a dashboard of what was played
 today, this week, this month and this year, a page for every show with every song it has played, an
-artists A-Z with MusicBrainz IDs, a page per year, most-played and least-played charts, and a **CSV / TXT
+artists A-Z with MusicBrainz IDs, a page per year, most-played charts, a "crate dive" of the tracks and artists played only once in each year, and a **CSV / TXT
 download button on every table and chart**. The layout is a quiet, typographic one inspired by
 archive sites such as Divisare. It sets no cookies, loads nothing from other sites and has no tracking.
 
