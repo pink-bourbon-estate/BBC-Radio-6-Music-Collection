@@ -10,6 +10,11 @@ on:
   schedule:
     - cron: "23 5 * * *"
   workflow_dispatch:
+    inputs:
+      start:
+        description: "Optional YYYY-MM-DD to re-scan from (to fill a gap in the data)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -59,6 +64,9 @@ jobs:
           import csv, datetime
           last = max(r[0] for r in csv.reader(open("data/episodes.csv", encoding="utf-8")) if r and r[0][:2] == "20")
           d = datetime.date.fromisoformat(last) - datetime.timedelta(days=3)  # re-check the last few days for late tracklists
+          override = "${{ github.event.inputs.start }}"
+          if override:
+              d = datetime.date.fromisoformat(override)
           print("start=" + d.isoformat())
           print("last=" + last)
           PY
