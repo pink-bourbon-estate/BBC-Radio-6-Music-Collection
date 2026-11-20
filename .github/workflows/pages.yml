@@ -31,7 +31,11 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # When the daily refresh calls this workflow it has just pushed new plays, so build from the
+      # latest main rather than the commit the refresh started from.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal && rustup default stable
