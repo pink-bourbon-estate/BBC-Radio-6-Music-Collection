@@ -15,6 +15,10 @@ on:
         description: "Optional YYYY-MM-DD to re-scan from (to fill a gap in the data)"
         required: false
         default: ""
+      end:
+        description: "Optional YYYY-MM-DD to stop at when filling a gap (needs start)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -71,14 +75,31 @@ jobs:
           print("last=" + last)
           PY
 
+      # Filling a gap: forget the episodes recorded in the range so they are fetched again with their plays.
+      - name: Forget episodes in the gap (only when a start and end date are given)
+        if: github.event.inputs.start != '' && github.event.inputs.end != ''
+        run: |
+          python3 - <<'PY'
+          import csv
+          a, b = "${{ github.event.inputs.start }}", "${{ github.event.inputs.end }}"
+          rows = list(csv.reader(open("data/episodes.csv", encoding="utf-8", newline="")))
+          keep = [r for i, r in enumerate(rows) if i == 0 or not (a <= r[0] <= b)]
+          print("dropped", len(rows) - len(keep), "episode rows")
+          csv.writer(open("data/episodes.csv", "w", encoding="utf-8", newline=""), lineterminator="\n").writerows(keep)
+          PY
+
       - name: Fetch new episodes and tracklists
-        run: ./target/release/bbc6 scrape --data data --start "${{ steps.last.outputs.start }}" --retry-empty --workers 2 --gap 0.5
+        run: |
+          end=""
+          if [ -n "${{ github.event.inputs.start }}" ] && [ -n "${{ github.event.inputs.end }}" ]; then end="--end ${{ github.event.inputs.end }}"; fi
+          ./target/release/bbc6 scrape --data data --start "${{ steps.last.outputs.start }}" $end --retry-empty --workers 2 --gap 0.5
 
       # scrape writes plain plays_YYYY.csv files (git ignores those). Compress them into data/plays/new/.
       - name: Keep the new plays
         run: |
           mkdir -p data/plays/new
           stamp=$(date -u +%Y-%m-%d)
+          if [ -n "${{ github.event.inputs.end }}" ]; then stamp="gap-${{ github.event.inputs.start }}"; fi
           for f in data/plays/plays_*.csv; do
             [ -e "$f" ] || continue
             year=$(basename "$f" .csv | sed 's/plays_//')
